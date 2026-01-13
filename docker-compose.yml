@@ -1,0 +1,12 @@
+services:
+  redis:
+    image: redis:7
+    container_name: live-switcher-redis
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+
+volumes:
+  redis-data:
