@@ -118,3 +118,48 @@ FCUnpublish, DeleteStream 없이
 - OnClose 호출
 ```
 근데 이것도 OBS 기준이고 뭐로 방송하느냐에 따라 FCUnpublish 커멘드 안올 수도 있다고 함;;
+
+
+---
+
+### 2026.03.23 변경안
+🧐 Url Prefix 형태로 분리해서 처리 -> 물리서버 구축 환경 자체가 다를 예정이라고 함
+
+##### 방송 시작
+```text
+1. main/backup 동시 인입
+2. main → Redis active = "main" 등록, wowza 포워딩 시작, heartbeat 갱신
+3. backup → Redis active 확인 → main이 active → standby
+```
+
+##### main stream 장애
+```text
+1. main heartbeat TTL 만료
+2. backup 감지 → Redis active = "backup" 로 변경
+3. backup → wowza 포워딩 시작, heartbeat 갱신
+4. main 복구되어 재인입
+   → Redis active = "backup" 확인
+   → standby (포워딩 안 함)
+   → heartbeat만 갱신 (언제든 투입 가능하도록)
+```
+
+##### backup stream 장애 (main active)
+```text
+1. backup heartbeat TTL 만료
+2. main 감지 → Redis active = "main" 으로 변경
+3. main → 링버퍼 flush → wowza 포워딩 재시작
+```
+
+##### 방송종료
+```text
+case 1: main active, 둘 다 살아있음
+  backup FCUnpublish → standby였으니까 그냥 종료
+  main FCUnpublish   → active 종료 = 방송 종료 → wowza 연결 해제
+
+case 2: backup active, main 없음
+  backup FCUnpublish → active 종료 = 방송 종료 → wowza 연결 해제
+
+case 3: backup active, main 재복구로 standby 중
+  backup FCUnpublish → active 종료 = 방송 종료 → wowza 연결 해제
+  main FCUnpublish   → standby였으니까 그냥 종료
+```

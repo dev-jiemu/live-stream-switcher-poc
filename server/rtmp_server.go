@@ -41,6 +41,7 @@ func RTMPStart() {
 
 			handler := &handler2.Handler{
 				ConnectionId: connectID,
+				NetConn:      conn,
 			}
 
 			return conn, &rtmp.ConnConfig{

@@ -6,13 +6,13 @@ type Config struct {
 	Redis   *RedisConfig
 	Logger  *SlogConfig
 	Wowza   *WowzaConfig
-	Address string `envconfig:"address" default:"localhost:1935"`
+	Address string `envconfig:"ADDRESS" default:"localhost:1935"`
 }
 
 type RedisConfig struct {
-	Type    string `json:"type" envconfig:"TYPE"`
-	Address string `json:"address" envconfig:"ADDRESS"`
-	Port    string `json:"port" envconfig:"PORT"`
+	Type    string `json:"type" envconfig:"TYPE" default:"single"`
+	Address string `json:"address" envconfig:"ADDRESS" default:"localhost"`
+	Port    string `json:"port" envconfig:"PORT" default:"6379"`
 }
 
 type WowzaConfig struct {
