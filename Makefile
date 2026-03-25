@@ -1,6 +1,6 @@
+include .env
+export
+
 run-local:
-	@echo "Start local development"
-	REDIS_TYPE=master \
-	REDIS_ADDRESS=localhost \
-	REDIS_PORT=6379
-	go run main.go
+	@echo "Starting local development :)"
+	@exec go run main.go

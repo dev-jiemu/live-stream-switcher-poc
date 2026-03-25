@@ -1,12 +1,17 @@
 package config
 
-import "github.com/kelseyhightower/envconfig"
+import (
+	"os"
+
+	"github.com/kelseyhightower/envconfig"
+)
 
 type Config struct {
-	Redis   *RedisConfig
-	Logger  *SlogConfig
-	Wowza   *WowzaConfig
-	Address string `envconfig:"ADDRESS" default:"localhost:1935"`
+	Redis    *RedisConfig
+	Logger   *SlogConfig
+	Wowza    *WowzaConfig
+	Address  string `envconfig:"ADDRESS" default:"localhost:1935"`
+	ServerID string `envconfig:"server_id" default:"hostname"`
 }
 
 type RedisConfig struct {
@@ -56,6 +61,9 @@ func InitConfig() error {
 	EnvConfig.Redis = redis
 	EnvConfig.Logger = slogConfig
 	EnvConfig.Wowza = wowzaConfig
+
+	hostname, _ := os.Hostname()
+	EnvConfig.ServerID = hostname
 
 	return nil
 }
