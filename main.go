@@ -6,8 +6,8 @@ import (
 	"log"
 
 	"github.com/dev-jiemu/live-stream-switcher-poc/config"
+	goRtmp "github.com/dev-jiemu/live-stream-switcher-poc/go-rtmp"
 	"github.com/dev-jiemu/live-stream-switcher-poc/logger"
-	"github.com/dev-jiemu/live-stream-switcher-poc/server"
 	"github.com/dev-jiemu/live-stream-switcher-poc/store"
 )
 
@@ -39,5 +39,6 @@ func main() {
 
 	store.NewRedisClient(fmt.Sprintf("%s:%s", config.EnvConfig.Redis.Address, config.EnvConfig.Redis.Port))
 
-	server.RTMPStart()
+	// TODO : lal 구현시 해당 코드 주석처리
+	goRtmp.RTMPStart()
 }

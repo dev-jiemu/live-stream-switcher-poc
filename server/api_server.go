@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// APIStart : not used - redis 처음부터 구현함
 func APIStart() {
 	router := gin.Default()
 

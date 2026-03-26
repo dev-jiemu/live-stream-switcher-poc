@@ -163,3 +163,14 @@ case 3: backup active, main 재복구로 standby 중
   backup FCUnpublish → active 종료 = 방송 종료 → wowza 연결 해제
   main FCUnpublish   → standby였으니까 그냥 종료
 ```
+
+---
+
+### 2026.03.26 Memo
+
+EOF Issue 가 생각 이상으로 많이 발생하는데, `onStatus` 이벤트의 중요성...? 을 생각하다보니 찾게된 패키지
+- 현재 사용중이였던 라이브러리: github.com/yutopp/go-rtmp
+- 찾은 라이브러리: github.com/q191201771/lal
+
+현재 사용한 `go-rtmp` 라이브러리는 연결과 별개로 스트림 전송 fail 을 잡아낼수 없는 구조라나.... <br/>
+따라서 `lal` 라이브러리로도 구현 해봄

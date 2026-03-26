@@ -1,4 +1,4 @@
-package server
+package go_rtmp
 
 import (
 	"io"
@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 
 	"github.com/dev-jiemu/live-stream-switcher-poc/config"
-	handler2 "github.com/dev-jiemu/live-stream-switcher-poc/handler"
+	handler2 "github.com/dev-jiemu/live-stream-switcher-poc/go-rtmp/handler"
 	"github.com/yutopp/go-rtmp"
 )
 
