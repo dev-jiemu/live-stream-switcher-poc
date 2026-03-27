@@ -1,4 +1,4 @@
-package handler
+package go_rtmp
 
 import (
 	"bytes"

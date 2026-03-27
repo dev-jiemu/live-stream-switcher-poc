@@ -7,7 +7,6 @@ import (
 	"sync/atomic"
 
 	"github.com/dev-jiemu/live-stream-switcher-poc/config"
-	handler2 "github.com/dev-jiemu/live-stream-switcher-poc/go-rtmp/handler"
 	"github.com/yutopp/go-rtmp"
 )
 
@@ -19,6 +18,7 @@ func RTMPStart() {
 
 	log.Println("====================")
 	log.Println("RTMP Forward Server")
+	log.Println("package : github.com/yutopp/go-rtmp")
 	log.Println("====================")
 
 	tcpAddr, err := net.ResolveTCPAddr("tcp", config.EnvConfig.Address)
@@ -39,7 +39,7 @@ func RTMPStart() {
 			atomic.AddInt64(&activeConnection, 1)
 			defer atomic.AddInt64(&activeConnection, -1)
 
-			handler := &handler2.Handler{
+			handler := &Handler{
 				ConnectionId: connectID,
 				NetConn:      conn,
 			}
