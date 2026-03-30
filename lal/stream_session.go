@@ -19,6 +19,7 @@ const (
 	EventForwardingFail               // Wowza 전송/연결 실패
 	EventReconnectFailed              // 재연결 모두 실패
 	EventSwitchFail                   // Standby → Active 스위칭 실패
+	EventContendLost                  // 경합 패배
 	EventStreamClose                  // 스트림 종료
 )
 
@@ -84,12 +85,11 @@ func (s *streamSession) setAppName(appName string) {
 // OnPubStart에서 호출
 func (s *streamSession) start() {
 	s.started = true
-	go s.runEventLoop()
 
 	serverId, _ := store.Client.GetActive(s.ctx, s.appName, s.streamName)
 	switch {
 	case serverId == "" || serverId == config.EnvConfig.ServerID:
-		ok, _ := store.Client.SetActive(s.ctx, s.appName, s.streamName, config.EnvConfig.ServerID)
+		ok, _ := store.Client.SetActiveWithHeartbeat(s.ctx, s.appName, s.streamName, config.EnvConfig.ServerID)
 		if ok {
 			if err := s.connectWowza(); err != nil {
 				store.Client.DeleteActive(s.ctx, s.appName, s.streamName)
@@ -101,6 +101,9 @@ func (s *streamSession) start() {
 	default:
 		log.Printf("[lal][%s/%s] 다른 서버가 active, Standby 대기", s.appName, s.streamName)
 	}
+
+	// connectWowza() 완료 후 Redis 상태가 확정된 시점에 runEventLoop 시작
+	go s.runEventLoop()
 }
 
 // OnMsg : lal이 스트림 패킷 수신할 때마다 호출 (오디오/비디오 모두)
@@ -237,10 +240,16 @@ func (s *streamSession) runEventLoop() {
 	heartbeatFailCount := 0
 	const maxHeartbeatFail = 3
 
-	// isActive는 FSM 전이(EventBecameActive 등)에만 의존해서 관리
-	// runEventLoop 진입 시점에 Redis 조회로 초기화하면 start()의 connectWowza()와
-	// 타이밍 경합이 생겨 EventBecameActive가 와도 isActive=false인 채로 남는 버그 발생
+	// start()에서 connectWowza() 완료 후 EventBecameActive가 eventCh에 들어온 상태
+	// 이 시점에 Redis 조회하면 정확한 active 상태를 알 수 있음
+	// (runEventLoop 시작 직후 조회하면 start()의 connectWowza()와 타이밍 경합 발생)
 	isActive := false
+	serverId, _ := store.Client.GetActive(s.ctx, s.appName, s.streamName)
+	if serverId == config.EnvConfig.ServerID {
+		isActive = true
+	}
+	// EventActiveExpired를 보낸 후 경합 결과가 확정될 때까지 중복 이벤트 차단
+	isContending := false
 
 	for {
 		select {
@@ -248,7 +257,7 @@ func (s *streamSession) runEventLoop() {
 			return
 
 		case <-watchTicker.C:
-			if isActive {
+			if isActive || isContending {
 				continue
 			}
 			activeServer, err := store.Client.GetActive(s.ctx, s.appName, s.streamName)
@@ -256,6 +265,7 @@ func (s *streamSession) runEventLoop() {
 				continue
 			}
 			if activeServer == "" {
+				isContending = true
 				s.eventCh <- EventActiveExpired
 				continue
 			}
@@ -265,6 +275,7 @@ func (s *streamSession) runEventLoop() {
 			}
 			if !alive {
 				store.Client.DeleteActive(s.ctx, s.appName, s.streamName)
+				isContending = true
 				s.eventCh <- EventActiveExpired
 			}
 
@@ -287,6 +298,14 @@ func (s *streamSession) runEventLoop() {
 			next := s.transition(s.state, event)
 			isActive = next == StateActive
 			s.state = next
+			// 연결이 최종 확정되면 플래그 해제하기
+			// - EventBecameActive : startConnectAsync 성공 → Active 전환
+			// - EventSwitchFail   : 연결 최종 실패 or 경합 패배 → Standby 유지
+			// EventActiveExpired 처리 후 startConnectAsync가 진행 중인 동안은 isContending=true 유지해야함
+			switch event {
+			case EventBecameActive, EventSwitchFail, EventContendLost:
+				isContending = false
+			}
 		}
 	}
 }
@@ -301,18 +320,25 @@ func (s *streamSession) transition(state State, event Event) State {
 
 		case EventActiveExpired:
 			log.Printf("[lal][%s/%s] FSM: 상대방 만료 → 경합 시도", s.appName, s.streamName)
-			ok, err := store.Client.SetActive(s.ctx, s.appName, s.streamName, config.EnvConfig.ServerID)
+			ok, err := store.Client.SetActiveWithHeartbeat(s.ctx, s.appName, s.streamName, config.EnvConfig.ServerID)
 			if err != nil || !ok {
 				log.Printf("[lal][%s/%s] FSM: 경합 패배 → Standby 유지", s.appName, s.streamName)
+				select {
+				case s.eventCh <- EventContendLost:
+				default:
+				}
 				return StateStandby
 			}
 			s.startConnectAsync(true)
 			return StateStandby
 
+		case EventContendLost:
+			// 경합 패배: 아무 처리 없이 Standby 유지, runEventLoop에서 isContending 해제만 담당
+			return StateStandby
+
 		case EventSwitchFail:
 			log.Printf("[lal][%s/%s] FSM: 스위칭 실패 → Redis 정리", s.appName, s.streamName)
 			store.Client.DeleteActive(s.ctx, s.appName, s.streamName)
-			store.Client.DelHeartbeat(s.ctx, s.appName, s.streamName, config.EnvConfig.ServerID)
 			return StateStandby
 
 		case EventStreamClose:
@@ -338,7 +364,6 @@ func (s *streamSession) transition(state State, event Event) State {
 		case EventReconnectFailed:
 			log.Printf("[lal][%s/%s] FSM: Active → Standby (복구 불가)", s.appName, s.streamName)
 			store.Client.DeleteActive(s.ctx, s.appName, s.streamName)
-			store.Client.DelHeartbeat(s.ctx, s.appName, s.streamName, config.EnvConfig.ServerID)
 			if s.pushSession != nil {
 				s.pushSession.Dispose()
 				s.pushSession = nil
@@ -356,8 +381,7 @@ func (s *streamSession) transition(state State, event Event) State {
 }
 
 func (s *streamSession) cleanup() {
-	store.Client.DeleteActive(s.ctx, s.appName, s.streamName)
-	store.Client.DelHeartbeat(s.ctx, s.appName, s.streamName, config.EnvConfig.ServerID)
+	// 정상 종료 시 Redis 키는 건드리지 않고 TTL 자연 만료에 맡김
 	if s.pushSession != nil {
 		s.pushSession.Dispose()
 		s.pushSession = nil

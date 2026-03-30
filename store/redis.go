@@ -92,6 +92,36 @@ func (v *Redis) SetActive(ctx context.Context, app, streamKey, serverName string
 	return ok, err
 }
 
+// setActiveWithHeartbeatScript : active 등록과 heartbeat 키 세팅을 원자적으로 수행하는 Lua 스크립트
+// active 등록(SetNX)에 성공한 경우에만 heartbeat 키도 함께 세팅
+// → active 등록 ~ 첫 heartbeat tick 사이 공백에 Standby 서버가 오탐하는 문제 방지
+var setActiveWithHeartbeatScript = redis.NewScript(`
+	local ok = redis.call('SET', KEYS[1], ARGV[1], 'NX')
+	if ok then
+		redis.call('SET', KEYS[2], ARGV[2], 'EX', ARGV[3])
+	end
+	return ok
+`)
+
+// SetActiveWithHeartbeat : active 등록 + heartbeat 키 세팅을 원자적으로 수행
+// SetActive 대신 이 함수를 사용하면 등록 직후부터 Standby 서버가 "살아있음"으로 판단함
+func (v *Redis) SetActiveWithHeartbeat(ctx context.Context, app, streamKey, serverName string) (bool, error) {
+	aKey := activeKey(app, streamKey)
+	hKey := heartbeatKey(app, streamKey, serverName)
+	ttlSeconds := int(HeartbeatTTL.Seconds())
+
+	result, err := setActiveWithHeartbeatScript.Run(ctx, v.client,
+		[]string{aKey, hKey},
+		serverName, time.Now().Unix(), ttlSeconds,
+	).Result()
+	if err != nil {
+		return false, err
+	}
+
+	// Lua 스크립트에서 SET NX 성공 시 "OK" 반환, 실패(이미 키 존재) 시 nil 반환
+	return result != nil, nil
+}
+
 // GetActive : active 서버 ID 조회
 func (v *Redis) GetActive(ctx context.Context, app, streamKey string) (string, error) {
 	key := activeKey(app, streamKey)

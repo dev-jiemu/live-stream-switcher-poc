@@ -115,7 +115,7 @@ func (v *Handler) OnPublish(ctx *rtmp.StreamContext, timestamp uint32, cmd *rtmp
 	serverId, _ := store.Client.GetActive(watchCtx, v.wowzaApp, v.streamKey)
 	switch {
 	case serverId == "" || serverId == config.EnvConfig.ServerID:
-		ok, _ := store.Client.SetActive(watchCtx, v.wowzaApp, v.streamKey, config.EnvConfig.ServerID)
+		ok, _ := store.Client.SetActiveWithHeartbeat(watchCtx, v.wowzaApp, v.streamKey, config.EnvConfig.ServerID)
 		if ok {
 			if err := v.connectWowza(); err != nil {
 				store.Client.DeleteActive(watchCtx, v.wowzaApp, v.streamKey)
@@ -211,7 +211,7 @@ func (v *Handler) transition(state State, event Event, ctx context.Context) Stat
 
 		case EventActiveExpired:
 			log.Println("FSM: 상대방 만료 감지 → 경합 시도")
-			ok, err := store.Client.SetActive(ctx, v.wowzaApp, v.streamKey, config.EnvConfig.ServerID)
+			ok, err := store.Client.SetActiveWithHeartbeat(ctx, v.wowzaApp, v.streamKey, config.EnvConfig.ServerID)
 			if err != nil || !ok {
 				log.Println("FSM: 경합 패배 → watching 계속")
 				return StateStandby
