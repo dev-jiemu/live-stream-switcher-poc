@@ -97,9 +97,11 @@ func (s *streamSession) start() {
 			} else {
 				s.eventCh <- EventBecameActive
 			}
+		} else {
+			log.Printf("[lal][%s/%s] 경합 패배 (동시 접근), Standby 대기", s.appName, s.streamName)
 		}
 	default:
-		log.Printf("[lal][%s/%s] 다른 서버가 active, Standby 대기", s.appName, s.streamName)
+		log.Printf("[lal][%s/%s] 다른 서버가 active (serverId=%s), Standby 대기", s.appName, s.streamName, serverId)
 	}
 
 	// connectWowza() 완료 후 Redis 상태가 확정된 시점에 runEventLoop 시작
