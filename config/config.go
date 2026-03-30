@@ -18,6 +18,9 @@ type RedisConfig struct {
 	Type    string `json:"type" envconfig:"TYPE" default:"single"`
 	Address string `json:"address" envconfig:"ADDRESS" default:"localhost"`
 	Port    string `json:"port" envconfig:"PORT" default:"6379"`
+	// 클러스터 모드용: 쉼표로 구분된 주소 목록 (예: "localhost:7001,localhost:7002,localhost:7003")
+	// TYPE=cluster 일 때 사용, 단일 모드에서는 ADDRESS:PORT 사용
+	Addrs string `json:"addrs" envconfig:"ADDRS" default:""`
 }
 
 type WowzaConfig struct {

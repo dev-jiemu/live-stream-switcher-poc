@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/dev-jiemu/live-stream-switcher-poc/config"
 	"github.com/dev-jiemu/live-stream-switcher-poc/lal"
@@ -37,9 +38,20 @@ func main() {
 	log.Printf("server id  : %v\n", config.EnvConfig.ServerID)
 	log.Printf("address    : %v\n", config.EnvConfig.Address)
 
-	store.NewRedisClient(fmt.Sprintf("%s:%s", config.EnvConfig.Redis.Address, config.EnvConfig.Redis.Port))
+	// Redis 연결: TYPE=cluster면 ADDRS(쉼표 구분), 아니면 ADDRESS:PORT 단일 노드
+	var redisAddrs []string
+	if config.EnvConfig.Redis.Type == "cluster" && config.EnvConfig.Redis.Addrs != "" {
+		for _, addr := range strings.Split(config.EnvConfig.Redis.Addrs, ",") {
+			if trimmed := strings.TrimSpace(addr); trimmed != "" {
+				redisAddrs = append(redisAddrs, trimmed)
+			}
+		}
+	} else {
+		redisAddrs = []string{fmt.Sprintf("%s:%s", config.EnvConfig.Redis.Address, config.EnvConfig.Redis.Port)}
+	}
+	log.Printf("redis addrs: %v (type=%s)", redisAddrs, config.EnvConfig.Redis.Type)
+	store.NewRedisClient(redisAddrs)
 
-	// TODO : lal 구현시 해당 코드 주석처리
 	//goRtmp.RTMPStart()
 	lal.RTMPStart()
 }

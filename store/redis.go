@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
+	"strings"
 	"time"
 
 	"github.com/dev-jiemu/live-stream-switcher-poc/config"
@@ -18,16 +20,28 @@ const (
 )
 
 type Redis struct {
-	client *redis.Client
+	client *redis.ClusterClient
 }
 
 var Client *Redis
 
-func NewRedisClient(addr string) {
+func NewRedisClient(addrs []string) {
 	ctx := context.Background()
-	// TODO : cluster 모드 고려하기
-	rdb := redis.NewClient(&redis.Options{
-		Addr: addr,
+
+	rdb := redis.NewClusterClient(&redis.ClusterOptions{
+		Addrs:      addrs,
+		MaxRetries: 3,
+		// 클러스터 노드가 MOVED 응답으로 내부 IP(172.28.0.x)를 알려줄 때
+		// 로컬 개발 환경에서는 해당 IP에 직접 접근 불가 → localhost:포트로 변환
+		// 물론 이건 docker-compose local 환경에서 이야기고, 실제 prod 올라갈땐 확인 필수임
+		NewClient: func(opt *redis.Options) *redis.Client {
+			// 172.28.0.x:PORT → 127.0.0.1:PORT 로 재매핑
+			host, port, err := net.SplitHostPort(opt.Addr)
+			if err == nil && strings.HasPrefix(host, "172.28.") {
+				opt.Addr = net.JoinHostPort("127.0.0.1", port)
+			}
+			return redis.NewClient(opt)
+		},
 	})
 
 	_, err := rdb.Ping(ctx).Result()
@@ -39,33 +53,46 @@ func NewRedisClient(addr string) {
 		client: rdb,
 	}
 
-	// server id 값으로 남아있는 기존 데이터 지우기 : 서버 가동 시점에 기존 데이터가 남아있으면 비정상으로 간주함
-	pattern := fmt.Sprintf("rtmp:heartbeat:*:%s", config.EnvConfig.ServerID)
-	keys, _ := Client.client.Keys(ctx, pattern).Result()
-	if len(keys) > 0 {
-		Client.client.Del(ctx, keys...)
-		log.Printf("잔여 heartbeat 키 %d개 정리", len(keys))
-	}
-
+	// 서버 가동 시점에 이 서버 ID로 남아있는 잔여 키 정리
+	// 클러스터 환경에서 Keys()는 접속한 노드 하나만 조회하므로 ForEachMaster로 전체 노드 순회
+	heartbeatPattern := fmt.Sprintf("rtmp:heartbeat:*:%s", config.EnvConfig.ServerID)
 	activePattern := "rtmp:active:*"
-	activeKeys, _ := Client.client.Keys(ctx, activePattern).Result()
-	for _, k := range activeKeys {
-		val, _ := Client.client.Get(ctx, k).Result()
-		if val == config.EnvConfig.ServerID {
-			Client.client.Del(ctx, k)
-			log.Printf("잔여 active 키 정리: %s", k)
+	var totalHeartbeat, totalActive int
+
+	_ = rdb.ForEachMaster(ctx, func(ctx context.Context, node *redis.Client) error {
+		hKeys, _ := node.Keys(ctx, heartbeatPattern).Result()
+		if len(hKeys) > 0 {
+			node.Del(ctx, hKeys...)
+			totalHeartbeat += len(hKeys)
 		}
+
+		aKeys, _ := node.Keys(ctx, activePattern).Result()
+		for _, k := range aKeys {
+			val, _ := node.Get(ctx, k).Result()
+			if val == config.EnvConfig.ServerID {
+				node.Del(ctx, k)
+				totalActive++
+				log.Printf("잔여 active 키 정리: %s", k)
+			}
+		}
+		return nil
+	})
+
+	if totalHeartbeat > 0 {
+		log.Printf("잔여 heartbeat 키 %d개 정리", totalHeartbeat)
 	}
 }
 
-// heartbeatKey : rtmp:heartbeat:{app}:{streamKey}:{serverName}
-func heartbeatKey(serverName, app, streamKey string) string {
-	return fmt.Sprintf("rtmp:heartbeat:%s:%s:%s", app, streamKey, serverName)
+// heartbeatKey : rtmp:heartbeat:{app:streamKey}:serverName
+// {app:streamKey} hash tag → activeKey와 항상 같은 슬롯에 배정됨 (Lua 멀티키 보장)
+func heartbeatKey(app, streamKey, serverName string) string {
+	return fmt.Sprintf("rtmp:heartbeat:{%s:%s}:%s", app, streamKey, serverName)
 }
 
-// activeKey : rtmp:active:{app}:{streamKey}
+// activeKey : rtmp:active:{app:streamKey}
+// {app:streamKey} hash tag → heartbeatKey와 항상 같은 슬롯에 배정됨 (Lua 멀티키 보장)
 func activeKey(app, streamKey string) string {
-	return fmt.Sprintf("rtmp:active:%s:%s", app, streamKey)
+	return fmt.Sprintf("rtmp:active:{%s:%s}", app, streamKey)
 }
 
 // RefreshHeartbeat : heartbeat 갱신 (TTL 연장)
@@ -99,8 +126,9 @@ var setActiveWithHeartbeatScript = redis.NewScript(`
 	local ok = redis.call('SET', KEYS[1], ARGV[1], 'NX')
 	if ok then
 		redis.call('SET', KEYS[2], ARGV[2], 'EX', ARGV[3])
+		return 1
 	end
-	return ok
+	return 0
 `)
 
 // SetActiveWithHeartbeat : active 등록 + heartbeat 키 세팅을 원자적으로 수행
@@ -110,16 +138,18 @@ func (v *Redis) SetActiveWithHeartbeat(ctx context.Context, app, streamKey, serv
 	hKey := heartbeatKey(app, streamKey, serverName)
 	ttlSeconds := int(HeartbeatTTL.Seconds())
 
+	log.Printf("[redis] SetActiveWithHeartbeat aKey=%s hKey=%s", aKey, hKey)
+
 	result, err := setActiveWithHeartbeatScript.Run(ctx, v.client,
 		[]string{aKey, hKey},
 		serverName, time.Now().Unix(), ttlSeconds,
-	).Result()
+	).Int()
 	if err != nil {
 		return false, err
 	}
 
-	// Lua 스크립트에서 SET NX 성공 시 "OK" 반환, 실패(이미 키 존재) 시 nil 반환
-	return result != nil, nil
+	// true, false 가 아니라 0, 1 이렇게 올 수도 있다고 ㅇㅂㅇ?
+	return result == 1, nil
 }
 
 // GetActive : active 서버 ID 조회

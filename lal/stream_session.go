@@ -89,11 +89,14 @@ func (s *streamSession) start() {
 	serverId, _ := store.Client.GetActive(s.ctx, s.appName, s.streamName)
 	switch {
 	case serverId == "" || serverId == config.EnvConfig.ServerID:
-		ok, _ := store.Client.SetActiveWithHeartbeat(s.ctx, s.appName, s.streamName, config.EnvConfig.ServerID)
+		ok, err := store.Client.SetActiveWithHeartbeat(s.ctx, s.appName, s.streamName, config.EnvConfig.ServerID)
+		if err != nil {
+			log.Printf("[lal][%s/%s] SetActiveWithHeartbeat 에러: %v", s.appName, s.streamName, err)
+		}
 		if ok {
 			if err := s.connectWowza(); err != nil {
 				store.Client.DeleteActive(s.ctx, s.appName, s.streamName)
-				log.Printf("[lal][%s/%s] 초기 Wowza 연결 실패, Standby로 대기: %v", s.appName, s.streamName, err)
+				log.Printf("[lal][%s/%s] Wowza 연결 실패, Standby로 대기: %v", s.appName, s.streamName, err)
 			} else {
 				s.eventCh <- EventBecameActive
 			}
